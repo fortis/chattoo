@@ -1,0 +1,12 @@
+[app]
+name = "Chattoo"
+addr = ":8080"
+
+[database]
+addr = "postgres://postgres:root@10.254.254.254:5432/chattoo?sslmode=disable"
+
+[cors]
+origin = "http://localhost"
+
+[jwt]
+secret = "HEYGABEN"

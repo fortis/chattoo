@@ -1,0 +1,5 @@
+sentry.bin
+.DS_Store
+vendor
+.vscode
+.idea
