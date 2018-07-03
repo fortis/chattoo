@@ -65,12 +65,12 @@ func (s *Server) isConnected(id int64) bool {
 	return ok
 }
 
+// Send message to recipient.
 func (s *Server) sendToRecipient(msg *message) {
 	s.clients[msg.To.Id].write(msg)
 }
 
-// listen and serve.
-// It serves client connection and sendAll request.
+// Listen and serve.
 func (s *Server) Listen() {
 	log.Println("Listening server...")
 
@@ -99,6 +99,7 @@ func (s *Server) Listen() {
 	}
 }
 
+// Websocket handler.
 func (s *Server) HandleWS(u user.User) websocket.Handler {
 	return websocket.Handler(func(ws *websocket.Conn) {
 		defer ws.Close()
