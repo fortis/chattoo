@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+const historySize = 100
+
 type Server struct {
 	history      []message
 	clients      sync.Map
@@ -81,7 +83,13 @@ func (s *Server) Listen() {
 				return true
 			})
 
+			// Append and trim history to `historySize`
 			s.history = append(s.history, *msg)
+			offset := len(s.history)-historySize
+			if offset > 0 {
+				s.history = s.history[offset:]
+			}
+
 			log.Println("New Broadcast message:", msg)
 
 		case msg := <-s.incoming:
