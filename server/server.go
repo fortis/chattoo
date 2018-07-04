@@ -4,12 +4,15 @@ import (
 	"log"
 	"golang.org/x/net/websocket"
 	"chattoo/user"
+	"sync"
 )
 
 type Server struct {
-	clients      map[int64]*client
+	history      []message
+	clients      sync.Map
 	connected    chan *client
 	disconnected chan *client
+	broadcast    chan *message
 	incoming     chan *message
 	done         chan bool
 	errors       chan error
@@ -17,20 +20,15 @@ type Server struct {
 
 // Create new ws server.
 func NewServer() *Server {
-	clients := make(map[int64]*client)
-	connected := make(chan *client)
-	disconnected := make(chan *client)
-	incoming := make(chan *message)
-	done := make(chan bool)
-	errors := make(chan error)
-
 	return &Server{
-		clients,
-		connected,
-		disconnected,
-		incoming,
-		done,
-		errors,
+		history:      make([]message, 0),
+		clients:      sync.Map{},
+		connected:    make(chan *client),
+		disconnected: make(chan *client),
+		broadcast:    make(chan *message),
+		incoming:     make(chan *message),
+		done:         make(chan bool),
+		errors:       make(chan error),
 	}
 }
 
@@ -43,7 +41,12 @@ func (s *Server) disconnect(c *client) {
 }
 
 func (s *Server) send(msg *message) {
-	s.incoming <- msg
+	switch msg.Type {
+	case privateMessageType:
+		s.incoming <- msg
+	case publicMessageType:
+		s.broadcast <- msg
+	}
 }
 
 func (s *Server) shutdown() {
@@ -54,22 +57,6 @@ func (s *Server) err(err error) {
 	s.errors <- err
 }
 
-func (s *Server) sendHistory(c *client) {
-	for _, msg := range s.clients[c.id].history {
-		c.write(msg)
-	}
-}
-
-func (s *Server) isConnected(id int64) bool {
-	_, ok := s.clients[id]
-	return ok
-}
-
-// Send message to recipient.
-func (s *Server) sendToRecipient(msg *message) {
-	s.clients[msg.To.Id].write(msg)
-}
-
 // Listen and serve.
 func (s *Server) Listen() {
 	log.Println("Listening server...")
@@ -77,29 +64,50 @@ func (s *Server) Listen() {
 	for {
 		select {
 		case c := <-s.connected:
-			s.clients[c.id] = c
-			s.sendHistory(c)
-			log.Println("Connected new client:", c.id, ". Now", len(s.clients), "clients connected.")
+			s.clients.Store(c.id, c)
+			for _, msg := range s.history {
+				websocket.JSON.Send(c.ws, msg)
+			}
+			log.Println("Connected new client:", c.id)
 
 		case c := <-s.disconnected:
-			delete(s.clients, c.id)
-			log.Println("Disconnected client: ", c.id)
+			s.clients.Delete(c.id)
+			log.Println("Disconnected client:", c.id)
+
+		case msg := <-s.broadcast:
+			s.clients.Range(func(key, value interface{}) bool {
+				c := value.(*client)
+				c.write(msg)
+				return true
+			})
+
+			s.history = append(s.history, *msg)
+			log.Println("New Broadcast message:", msg)
 
 		case msg := <-s.incoming:
-			s.sendToRecipient(msg)
-			log.Println("New message:", msg)
+			r, receiverFound := s.clients.Load(msg.To.Id)
+			s, senderFound := s.clients.Load(msg.From.Id)
+			if receiverFound && senderFound {
+				receiver := r.(*client)
+				receiver.write(msg)
+
+				sender := s.(*client)
+				sender.write(msg)
+
+				log.Println("New private message:", msg)
+			}
 
 		case err := <-s.errors:
 			log.Println("Error:", err.Error())
 
 		case <-s.done:
-			log.Println("shutdown server")
+			log.Println("Shutdown server")
 			return
 		}
 	}
 }
 
-// Websocket handler.
+// WebSocket handler.
 func (s *Server) HandleWS(u user.User) websocket.Handler {
 	return websocket.Handler(func(ws *websocket.Conn) {
 		defer ws.Close()

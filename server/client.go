@@ -6,6 +6,7 @@ import (
 	"log"
 	"golang.org/x/net/websocket"
 	"chattoo/user"
+	"errors"
 )
 
 const channelBufSize = 100
@@ -16,7 +17,6 @@ type client struct {
 	user     user.User
 	ws       *websocket.Conn
 	server   *Server
-	history  []*message
 	messages chan *message
 	done     chan bool
 }
@@ -30,11 +30,15 @@ func newClient(ws *websocket.Conn, server *Server, u user.User) *client {
 		panic("server cannot be nil")
 	}
 
-	ch := make(chan *message, channelBufSize)
-	doneCh := make(chan bool)
-	ip := ws.Request().RemoteAddr
-	var history []*message
-	return &client{u.Id, ip, u, ws, server, history, ch, doneCh}
+	return &client{
+		id:       u.Id,
+		ip:       ws.Request().RemoteAddr,
+		user:     u,
+		ws:       ws,
+		server:   server,
+		messages: make(chan *message, channelBufSize),
+		done:     make(chan bool),
+	}
 }
 
 func (c *client) write(msg *message) {
@@ -49,17 +53,17 @@ func (c *client) write(msg *message) {
 }
 
 func (c *client) listen() {
-	go c.listenOut()
-	c.listenIn()
+	go c.listenReceiver()
+	c.listenSender()
 }
 
-// Listening write to client
-func (c *client) listenOut() {
+// Listening messages to client
+func (c *client) listenReceiver() {
 	for {
 		select {
 		case msg := <-c.messages:
 			websocket.JSON.Send(c.ws, msg)
-			log.Println("Sent msg:", msg)
+			log.Println("New incoming msg:", msg)
 
 		case <-c.done:
 			c.server.disconnect(c)
@@ -69,8 +73,8 @@ func (c *client) listenOut() {
 	}
 }
 
-// Listening read from client
-func (c *client) listenIn() {
+// Listening messages from client
+func (c *client) listenSender() {
 	for {
 		select {
 		case <-c.done:
@@ -91,11 +95,27 @@ func (c *client) listenIn() {
 				return
 			}
 
-			if c.server.isConnected(msg.To.Id) {
-				c.write(&msg)
-				c.history = append(c.history, &msg)
-				c.server.send(&msg)
+			if err = c.validate(msg); err != nil {
+				c.server.err(err)
+				break
 			}
+
+			c.server.send(&msg)
 		}
 	}
+}
+
+func (c *client) validate(msg message) error {
+	if err := msg.validate(); err != nil {
+		return err
+	}
+
+	if msg.Type == privateMessageType {
+		_, found := c.server.clients.Load(msg.To.Id)
+		if !found {
+			return errors.New("client not found on server")
+		}
+	}
+
+	return nil
 }
