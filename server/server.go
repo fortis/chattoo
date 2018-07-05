@@ -84,6 +84,8 @@ func (s *Server) Listen() {
 			})
 
 			// Append and trim history to `historySize`
+			// There we have data race, but maybe in that case
+			// it's not critical for public chat, as the range works without crashes.
 			s.history = append(s.history, *msg)
 			offset := len(s.history)-historySize
 			if offset > 0 {
